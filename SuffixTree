@@ -1,0 +1,36 @@
+class SuffixTree:
+    def __init__(self, text):
+        self.text = text
+        self.root = {}
+        self.build_suffix_tree()
+
+    def build_suffix_tree(self):
+        text = self.text
+        n = len(text)
+        
+        for i in range(n):
+            current_node = self.root
+            print("currrent",current_node)
+            for j in range(i, n):
+                char = text[j]
+                if char not in current_node:
+                    current_node[char] = {}
+                current_node = current_node[char]
+                print("root",self.root)
+            current_node['$'] = i  # 用特殊字符表示叶子节点
+
+    def display(self, node=None, indent=0):
+        if node is None:
+            node = self.root
+        for char, next_node in node.items():
+            if char == '$':
+                print(' ' * indent + f"Leaf at index: {next_node}")
+            else:
+                print(' ' * indent + char)
+                self.display(next_node, indent + 2)
+
+# 测试后缀树
+text = "atcgatcg"
+tree = SuffixTree(text)
+print(tree.root)
+tree.display()
