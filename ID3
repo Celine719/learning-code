@@ -1,0 +1,198 @@
+import math
+import numpy as np
+import pandas as pd
+from collections import deque
+from sklearn.model_selection import train_test_split
+ 
+# 2023.12.20
+    
+class ID3():
+    def __init__(self):
+        self.tree = None
+
+    def cal_HD(self,df):
+    # 计算数据集D的经验熵
+        label_col = df[df.columns[-1]]
+        HD = 0
+        value_counts = label_col.value_counts(normalize=True).values
+        for i in value_counts:
+            HD = HD - i * math.log(i) # 无0值出现
+        return HD
+    
+    def cal_EA(self, df, feature):
+        # 计算特征feature对数据集D的经验条件熵
+        EA = 0
+        for fea_class in df[feature].unique():
+            subset_df = df[[feature, df.columns[-1]]]
+            filtered_df = subset_df[subset_df[feature] == fea_class]
+            EA += self.cal_HD(filtered_df) * len(filtered_df) / len(df)
+        return EA
+    
+    def choose_fea(self, df, features):
+        # 选择信息增益最大的特征
+        Gain_list = []
+        for fea in features:
+            Gain_list.append(self.cal_HD(df) - self.cal_EA(df, fea))
+        
+        max_Gain_idx = np.argmax(np.array(Gain_list))
+        max_Gain = Gain_list[max_Gain_idx]
+        max_fea = features[max_Gain_idx]
+        
+        return max_fea, max_Gain
+    
+    def sub_df(self, df, node, value):  
+        # 获取特征中某一类别的所有数据
+        sub_table = df[df[node] == value].reset_index(drop=True)
+        return sub_table
+    
+    def build_tree(self, df, features=None, tree=None):
+        if features is None:
+            features = df.columns.tolist()[:-1]
+
+        if tree is None:
+            tree = {}
+
+        stack = deque([(df, tree)])
+        while stack:
+            current_df, current_tree = stack.pop()
+            if len(current_df[current_df.columns[-1]].unique()) == 1:
+                current_tree["leaf_node"] = current_df.iloc[:, -1].unique()[0]
+            elif not features:
+            # 当特征用完时，返回一个默认的叶子节点（例如，使用当前子树中最常见的类别）
+                labels, counts = np.unique(current_df[current_df.columns[-1]], return_counts=True)
+                current_tree["leaf_node"] = labels[np.argmax(counts)]
+            else:
+                node, Gain = self.choose_fea(current_df,features)
+                arr_class = np.unique(current_df[node])
+                current_tree[node] = {}
+                for fea_class in arr_class:
+                    sub_df = self.sub_df(current_df, node, fea_class)
+                    if len(sub_df[current_df.columns[-1]].unique()) == 1:
+                        labels, counts = np.unique(sub_df[sub_df.columns[-1]], return_counts=True)
+                        current_tree[node][fea_class] = {'leaf_node': labels[np.argmax(counts)]}
+                    else:
+                        current_tree[node][fea_class] = {}
+                        stack.append((sub_df, current_tree[node][fea_class]))
+
+        
+        return tree
+
+    def fit(self, x, y):
+        df = pd.concat([x, y], axis=1)
+        self.tree = self.build_tree(df)   
+        
+    def prediction(self, df):
+        predictions = []
+        for index, row in df.iterrows():
+            tree = self.tree  # 使用构建好的决策树
+            while isinstance(tree, dict):
+                node = next(iter(tree), None)  # 使用 None 作为默认值
+                if node is not None and row[node] in tree.get(node, {}):
+                    tree = tree[node][row[node]]
+                else:
+                    # 如果找不到匹配的节点，返回默认预测值
+                    default_prediction = self.most_common_label(df)
+                    predictions.append(default_prediction)
+                    break
+
+
+                if 'leaf_node' in tree:
+                    pred = tree['leaf_node']
+                    predictions.append(pred)
+                    break
+        return predictions
+
+    def post_prune(self, node, validation_data):
+        if 'leaf_node' in node:
+            return
+
+        subtree_values = []  # 保存每个子树对应的 value
+        subtrees = []  # 保存每个子树
+
+        # 遍历子树之前，先递归处理所有子树
+        for value, subtree in node.items():
+            self.post_prune(subtree, validation_data)
+            subtree_values.append(value)
+            subtrees.append(subtree)
+
+        # 计算剪枝前的误差
+        error_before_prune = self.evaluate(validation_data)
+        # 找到剪枝后误差最小的子树
+        best_pruned_subtree = None
+        best_error_after_prune = float('inf')
+
+        for value, subtree in zip(subtree_values, subtrees):
+            node_copy = node.copy()
+            del node_copy[value]  # 剪掉子树
+            error_after_prune = self.evaluate(validation_data)
+
+            # 选择误差最小的子树
+            if error_after_prune < best_error_after_prune:
+                best_error_after_prune = error_after_prune
+                best_pruned_subtree = node_copy
+
+        # 根据误差的变化决定是否进行剪枝
+        if best_pruned_subtree is not None and best_error_after_prune < error_before_prune:
+            node.clear()
+            node.update(best_pruned_subtree)
+
+
+    def most_common_label(self, df):
+        # 返回数据集中最常见的标签
+        labels, counts = np.unique(df[df.columns[-1]], return_counts=True)
+        return labels[np.argmax(counts)]
+    def evaluate(self,validation_data):
+        #计算准确率
+        predictions = self.prediction(validation_data)
+        true_labels = validation_data[validation_data.columns[-1]].tolist()
+        correct_count = sum(1 for i in range(len(true_labels)) if true_labels[i] == predictions[i])
+        total_count = len(true_labels)
+        accuracy = correct_count / total_count
+        return 1 - accuracy  # 返回误差，可以根据需要调整
+    
+    def calculate_recall(y_true, y_pred, positive_class):
+        # 计算召回率
+        true_positives = sum((true == positive_class) and (pred == positive_class) for true, pred in zip(y_true, y_pred))
+        actual_positives = sum(label == positive_class for label in y_true)
+
+        recall = true_positives / actual_positives if actual_positives > 0 else 0
+        return recall
+    
+    
+
+
+
+
+df = pd.read_csv("G:\\540\\data\\agaricus-lepiota.data", sep=',')
+df_target = df.iloc[:,0]
+df_data = df.iloc[:,1:]
+
+# df_target = combined_df.iloc[:,-1]
+# df_data = combined_df.iloc[:,:-1]
+
+
+# 将数据集分成训练集和测试集，其中测试集占比为20%
+x_train, x_test, y_train, y_test = train_test_split(df_data, df_target, train_size=0.8) 
+
+id3_model = ID3()
+id3_model.fit(x_train,y_train)
+print("1",id3_model.tree)
+y_pred = id3_model.prediction(x_test)
+acc = np.sum(y_test == y_pred)/y_test.shape[0]
+print(acc)
+# 假设x_val和y_val是你的验证数据
+validation_data = pd.concat([x_train, y_train], axis=1)
+
+# 步骤3：调用post_prune方法
+id3_model.post_prune(id3_model.tree, validation_data)
+
+y_pred = id3_model.prediction(x_test)
+acc = np.sum(y_test == y_pred)/y_test.shape[0]
+print(acc)
+print("2",id3_model.tree)
+# id_tree = model.build_tree(train_df)
+# # print(id_tree)
+# prediction = model.fix_model(train_df,id_tree)
+# print(prediction)
+# accuracy = model.accuracy(test_df)
+# print(accuracy)
