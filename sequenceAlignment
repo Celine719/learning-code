@@ -1,0 +1,137 @@
+import numpy as np
+
+# 比对函数
+def alignment(str1, str2, method):
+    # 罚分系数
+    gap_open = -2
+    gap_extend = -1
+    match = 1
+    mismatch = -2
+    
+    # 初始化矩阵大小
+    len_str1 = len(str1) + 1
+    len_str2 = len(str2) + 1
+
+    # 初始化矩阵
+    # M：匹配矩阵，用于保存匹配或错配得分。
+    # U：向上插入矩阵，用于保存插入操作得分。
+    # D：向下插入矩阵，用于保存删除操作得分。
+    
+    M = np.zeros((len_str1, len_str2))  # 匹配矩阵（中间层）
+    U = np.full((len_str1, len_str2), -np.inf)  # 向上插入矩阵  
+    D = np.full((len_str1, len_str2), -np.inf)  # 向下插入矩阵
+
+    #初始化边界条件
+    M[0, 0] = 0
+    if method == "Global": #如果是全局比对不初始化为0，因为indel有罚分；如果是局部比对，由于可以从任何一个地方开始，所以边界初始化为0
+        for i in range(1, len_str1):
+            U[i, 0] = gap_open + (i-1) * gap_extend
+            M[i, 0] = gap_open + (i-1) * gap_extend 
+        for j in range(1, len_str2):
+            D[0, j] = gap_open + (j-1) * gap_extend
+            M[0, j] = gap_open + (j-1) * gap_extend
+
+    for i in range(1, len_str1):
+        for j in range(1, len_str2):
+            if str1[i-1] == str2[j-1]:
+                match_score = M[i-1, j-1] + match
+            else:
+                match_score = M[i-1, j-1] + mismatch
+
+            U[i, j] = max(M[i-1, j] + gap_open, U[i-1, j] + gap_extend)
+            D[i, j] = max(M[i, j-1] + gap_open, D[i, j-1] + gap_extend)
+
+            if method == "Global":
+                M[i, j] = max(match_score, U[i, j], D[i, j])
+            elif method == "Local":
+                M[i, j] = max(0, match_score, U[i, j], D[i, j])
+    
+            else:
+                print("请输入正确的比对方法")
+                return None
+
+    # 根据得分矩阵进行回溯，生成比对结果和CIGAR字符串
+    aligned_str1, aligned_str2, cigar = traceback(M, U, D, str1, str2, method)
+    
+    return M, U, D, aligned_str1, aligned_str2, cigar
+
+# 回溯函数，生成最终比对结果和CIGAR字符串
+def traceback(M, U, D, str1, str2, method):
+    # 初始化回溯
+    alignment_str1 = []
+    alignment_str2 = []
+    CIGAR = []
+   
+    # M：匹配矩阵，用于保存匹配或错配得分。
+    # U：向上插入矩阵，用于保存插入操作得分。
+    # D：向下插入矩阵，用于保存删除操作得分。
+    # 确定回溯起点：全局回溯从右下角开始，逐步回到左上角，找到最优比对路径。
+    # 通过找到矩阵 M 中的最大值位置，可以确定比对的起点，从这个最高得分的位置开始回溯
+    
+    if method == "Global":
+        i, j = len(str1), len(str2) #最大值即在矩阵的最后一个网格
+    elif method == "Local":
+        i, j = np.unravel_index(np.argmax(M), M.shape) #矩阵中找到最大值所在的行和列的索引
+    
+    # 开始回溯
+    while i > 0 or j > 0:
+        if method == "Local" and M[i, j] == 0:#如果当前的比对方法是局部比对，并且当前位置的匹配矩阵 M 的值为0，表示到达了局部比对的起点，此时结束回溯。
+            break
+
+        current_score = M[i, j]
+        
+        if i > 0 and j > 0 and (current_score == M[i-1, j-1] + (1 if str1[i-1] == str2[j-1] else -2)): #查找得分来源是否是左上角
+            alignment_str1.append(str1[i-1])
+            alignment_str2.append(str2[j-1])
+            CIGAR.append('M')
+            i -= 1
+            j -= 1
+        elif i > 0 and current_score == U[i, j]: #当前得分是否来自上方矩阵
+            alignment_str1.append(str1[i-1])
+            alignment_str2.append('-')
+            CIGAR.append('D')
+            i -= 1
+        elif j > 0 and current_score == D[i, j]: #当前得分是否来自下方矩阵
+            alignment_str1.append('-')
+            alignment_str2.append(str2[j-1])
+            CIGAR.append('I')
+            j -= 1
+
+    # 反转比对结果以获得正确顺序
+    alignment_str1.reverse()
+    alignment_str2.reverse()
+    CIGAR.reverse()
+
+    # 合并CIGAR字符串
+    compact_cigar = []
+    count = 1
+    for k in range(1, len(CIGAR)):
+        if CIGAR[k] == CIGAR[k-1]: #计数相同的符号
+            count += 1  
+        else:
+            compact_cigar.append(f"{count}{CIGAR[k-1]}")
+            count = 1 #重置，记录CIGAR[k]
+    compact_cigar.append(f"{count}{CIGAR[-1]}")
+
+    return ''.join(alignment_str1), ''.join(alignment_str2), ''.join(compact_cigar)
+
+# 测试比对
+str1 = "TAACGGCAAAGACGGCAATCCCATCTTTTTCAACAATTAAGCGCCCTCCTTTAATCGTGGGATCAGTCGCCGCGCCATAAACCTGTAGCACTCCATTATTGATCGTAGTCTGGTTTACCGCGCCACCCATTTGAACAATTTGATAACCA"
+str2 = "TAACGGCAAAGACGGCAATCCCATCTTTTTCAACAATTAAGCGCCCTCCTTTAATCGGGGGATCAGTCGCCGCGCCATAAACCCTGTAGCACTCCATTATTGATCGTAGTCTGGTTTACCGCGCCACCCATTTGAACAATTTGATAACCA"
+
+# 执行全局比对
+M, U, D, aligned_str1, aligned_str2, cigar = alignment(str1, str2, "Global") # method = Global/Local
+
+# 输出结果
+print("Alignment Matrix:")
+print(M)
+print("Up Insertion Matrix:")
+print(U)
+print("Down Insertion Matrix:")
+print(D)
+print("Aligned Sequence 1:")
+print(aligned_str1)
+print("Aligned Sequence 2:")
+print(aligned_str2)
+print("CIGAR Result:")
+print(cigar)
